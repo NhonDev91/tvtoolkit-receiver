@@ -37,6 +37,11 @@ Luồng: `LAUNCH` app ID → `CONNECT` tới `transportId` của app → `HELLO`
 hai chiều → `STATE: connected`. Điện thoại ngắt kết nối thì trang đóng phiên WebRTC; không còn điện thoại nào thì
 app receiver tự đóng.
 
+Bấm Home trên Google TV chỉ ẨN trang (WebRTC vẫn chạy). Trang bị ẩn hoặc TV vào standby quá 10 giây thì app receiver tự
+đóng; điện thoại thấy receiver không còn và báo mất hình (có nút Retry). Quay lại trước 10 giây thì không sao.
+
+Sửa `receiver.js` thì tăng `BUILD` và `?v=` trong `index.html`: GitHub Pages cho TV giữ file cũ 10 phút.
+
 Ghi chú cho phía điện thoại:
 - Không dùng STUN/TURN (`iceServers` rỗng): điện thoại và TV cùng mạng LAN.
 - Track video `sendonly`, nên ưu tiên H.264 (TV giải mã bằng phần cứng). Âm thanh tuỳ chọn (Opus).

@@ -17,6 +17,9 @@ const NAMESPACE = 'urn:x-cast:com.foxcode.tvtoolkit.mirror';
 const PROTOCOL_VERSION = 1;
 const CAF_URL = 'https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js';
 const STATS_INTERVAL_MS = 1000;
+const BUILD = '2026-11-17.2';
+/** The TV left the page (Home, another app, other input) for this long: close the app so the phone offers Retry. */
+const HIDDEN_STOP_MS = 10000;
 
 const params = new URLSearchParams(location.search);
 const harnessMode = params.has('harness');
@@ -242,8 +245,46 @@ function castTransport() {
   // Without a media session the framework would close the app after a few idle minutes.
   options.disableIdleTimeout = true;
   options.statusText = 'TV Toolkit';
+  watchVisibility(context);
   context.start(options);
+  log('receiver build', BUILD);
   return { send: (to, msg) => context.sendCustomMessage(NAMESPACE, to, msg) };
+}
+
+/**
+ * Pressing Home on a Google TV only HIDES this page: it keeps running and WebRTC keeps sending, so the phone would
+ * still show "Mirroring" while the TV shows its home screen. Hidden (or in standby) for HIDDEN_STOP_MS → stop the
+ * app; the phone sees the receiver gone and offers Retry. Back in view before that → nothing happens.
+ */
+function watchVisibility(context) {
+  const hiddenBy = new Set();
+  let timer = null;
+  const update = (source, hidden) => {
+    if (hidden) hiddenBy.add(source);
+    else hiddenBy.delete(source);
+    if (hiddenBy.size === 0) {
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+        log('visible again');
+      }
+      return;
+    }
+    if (timer) return;
+    log('hidden by', [...hiddenBy].join(','));
+    timer = setTimeout(() => {
+      log('hidden too long, closing the receiver');
+      closePeer('page hidden');
+      context.stop();
+    }, HIDDEN_STOP_MS);
+  };
+  context.addEventListener(cast.framework.system.EventType.VISIBILITY_CHANGED, (event) => {
+    update('cast', event.isVisible === false);
+  });
+  context.addEventListener(cast.framework.system.EventType.STANDBY_CHANGED, (event) => {
+    update('standby', event.isStandby === true);
+  });
+  document.addEventListener('visibilitychange', () => update('document', document.visibilityState === 'hidden'));
 }
 
 function harnessTransport() {
