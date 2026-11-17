@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Receiver Harness</title>
+  <style>
+    :root { --bg: #f4f6f8; --text: #1b232b; --muted: #5b6875; --card: #ffffff; --line: #d8dee4; }
+    @media (prefers-color-scheme: dark) {
+      :root { --bg: #0b0f14; --text: #e8eef2; --muted: #8a99a6; --card: #141a21; --line: #26303a; }
+    }
+    body { margin: 0; padding: 16px; background: var(--bg); color: var(--text); font-family: system-ui, sans-serif; }
+    h1 { font-size: 20px; margin: 0 0 4px; }
+    p { margin: 0 0 16px; color: var(--muted); }
+    .row { display: flex; flex-wrap: wrap; gap: 16px; }
+    .panel { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 12px; }
+    .panel h2 { font-size: 14px; margin: 0 0 8px; color: var(--muted); font-weight: 600; }
+    canvas { width: 180px; height: 320px; background: #000; display: block; }
+    iframe { width: 568px; max-width: calc(100vw - 64px); aspect-ratio: 16 / 9; border: 0; display: block; }
+    #log { margin: 16px 0 0; font: 12px/1.5 ui-monospace, Menlo, monospace; white-space: pre-wrap; max-height: 240px; overflow: auto; }
+    #state { font-weight: 600; }
+  </style>
+</head>
+<body>
+  <h1>Receiver harness</h1>
+  <p>Plays the phone's part: a canvas "screen" is sent over WebRTC to the receiver page in the frame, using the same
+    messages the app sends on the Cast channel. State: <span id="state">starting</span></p>
+  <div class="row">
+    <div class="panel"><h2>Phone (sender)</h2><canvas id="screen" width="360" height="640"></canvas></div>
+    <div class="panel"><h2>TV (receiver page)</h2><iframe id="tv" src="../index.html?harness&amp;debug"></iframe></div>
+  </div>
+  <pre id="log"></pre>
+  <script>
+    'use strict';
+    const canvas = document.getElementById('screen');
+    const ctx = canvas.getContext('2d');
+    const frame = document.getElementById('tv');
+    const logEl = document.getElementById('log');
+    const stateEl = document.getElementById('state');
+    const result = { ready: false, answer: false, localIce: 0, remoteIce: 0, state: 'new', error: null };
+    window.harnessResult = result;
+    let pc = null;
+
+    function log(line) {
+      logEl.textContent += `${new Date().toISOString().slice(11, 23)}  ${line}\n`;
+    }
+
+    function draw() {
+      const now = performance.now();
+      ctx.fillStyle = '#10161d';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = '#3fd8cf';
+      ctx.fillRect((now / 4) % canvas.width, 560, 60, 24);
+      ctx.fillStyle = '#e8eef2';
+      ctx.font = 'bold 44px ui-monospace, Menlo, monospace';
+      ctx.fillText((now / 1000).toFixed(2), 40, 320);
+      requestAnimationFrame(draw);
+    }
+
+    function toTv(msg) {
+      frame.contentWindow.postMessage({ from: 'phone', msg }, '*');
+    }
+
+    async function startCall() {
+      const stream = canvas.captureStream(30);
+      pc = new RTCPeerConnection({ iceServers: [] });
+      stream.getTracks().forEach((track) => pc.addTrack(track, stream));
+      pc.onicecandidate = (event) => {
+        if (!event.candidate) return;
+        result.localIce++;
+        toTv({
+          type: 'ICE',
+          candidate: event.candidate.candidate,
+          sdpMid: event.candidate.sdpMid,
+          sdpMLineIndex: event.candidate.sdpMLineIndex,
+        });
+      };
+      pc.onconnectionstatechange = () => log(`phone side: ${pc.connectionState}`);
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      toTv({ type: 'OFFER', sdp: pc.localDescription.sdp });
+      log('OFFER sent');
+    }
+
+    window.addEventListener('message', async (event) => {
+      if (event.source !== frame.contentWindow) return;
+      const msg = event.data && event.data.msg;
+      if (!msg) return;
+      switch (msg.type) {
+        case 'LOADED':
+          log('receiver loaded, sending HELLO');
+          toTv({ type: 'HELLO' });
+          break;
+        case 'READY':
+          result.ready = true;
+          log(`READY v${msg.version}`);
+          startCall().catch((err) => { result.error = String(err); log(`error: ${err}`); });
+          break;
+        case 'ANSWER':
+          result.answer = true;
+          log('ANSWER received');
+          await pc.setRemoteDescription({ type: 'answer', sdp: msg.sdp });
+          break;
+        case 'ICE':
+          result.remoteIce++;
+          await pc.addIceCandidate({ candidate: msg.candidate, sdpMid: msg.sdpMid, sdpMLineIndex: msg.sdpMLineIndex });
+          break;
+        case 'STATE':
+          result.state = msg.state;
+          stateEl.textContent = msg.state;
+          log(`receiver state: ${msg.state}`);
+          break;
+        case 'ERROR':
+          result.error = msg.message;
+          log(`receiver error: ${msg.message}`);
+          break;
+        default:
+          log(`unknown: ${JSON.stringify(msg)}`);
+      }
+    });
+
+    draw();
+  </script>
+</body>
+</html>
